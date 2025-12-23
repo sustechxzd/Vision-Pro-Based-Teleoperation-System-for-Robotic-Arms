@@ -1,0 +1,58 @@
+---------------IP-----------------
+1. IP的说明：
+VisionPro IP：动态IP，由当前vision pro 所连接的 wifi自动分配 ，目前为10.12.102.110/14[2025/12/23]
+Robotic arm IP：固定IP，接入的是固定实验室有线局域网，分配固定的IP，为 10.20.46.135/17
+电脑 IP：动态IP + 固定IP，同时连接 wifi 和 实验室局域网，具有两个IP：
+	动态IP（Wifi）：10.14.226.141/14 (和VisionPro 在统一子网下)
+	固定IP（有线局域网）：10.20.46.123/17 (和 Robotic arm 在统一子网下)
+	可以输入 ip addr show 或 ip a 来查看
+
+2. 项目环境准备：
+	1. vision 标定 
+	在 https://github.com/Improbable-AI/VisionProTeleop/tree/main 下载github 
+
+	2. miniconda安装
+		a. 转到安装目录，运行
+		wget https://repo.anaconda.com/miniconda/Miniconda3-py310_24.5.0-0-Linux-x86_64.sh 
+		b. 运行下面代码，安装 
+		bash Miniconda3-py310_24.5.0-0-Linux-x86_64.sh
+		注意：输入yes
+		c. 添加环境变量 
+		source ~/.bashrc
+		d. 查看是否安装版本
+		conda --version
+
+	3. 配置虚拟环境
+		a. 创建虚拟环境 
+		conda create -n tv python=3.9 -y
+		注意：睿尔曼需要python >= 3.9
+
+		b. 进入虚拟环境
+		conda activate tv
+
+		c. 安装mojoco
+		conda install -c conda-forge mujoco -y
+
+		d. 安装visionpro依赖
+		pip install --upgrade avp_stream -i https://pypi.org/simple
+
+		e. 安装睿尔曼依赖
+		pip install Robotic_Arm
+
+2. 项目说明：
+	VisionProTeleop：VisionPro的手部追踪 github 项目 (除了内部的vp_teleop_wu.py文件)
+	example.py文件：测试VisionPro与PC是否连接成功的文件。
+	vp_teleop_wu.py：Robitic arm、PC、VisionPro三方通信的代码文件，具体为：
+		实时读取 VisionPro 手部追踪数据，通过低通滤波和平滑坐标变换控制机械臂的位置和姿态，同时根据手部抓取状态控制夹爪开合，实现机器人手臂的虚拟现实遥操作。
+		
+3. 运行
+	1) PC 与 VisionPro 连接测试：
+		a. 进入虚拟环境
+		b. vision pro 中运行黄色软件（如果中途脱下vision pro，需要长按vision pro两侧的按钮，关闭该程序后台，并重新进入）
+		c. 运行example.py文件，查看是否输出手部最终坐标
+			python example.py
+	2) 同步：
+		a. 进入虚拟环境（如果没有进入）
+		b. vision pro 中运行黄色软件（如果中途脱下vision pro，需要长按vision pro两侧的按钮，关闭该程序后台，并重新进入）
+		c. 运行vp_teleop_wu.py文件，查看是否能够控制机械臂
+				python vp_teleop_wu.py
