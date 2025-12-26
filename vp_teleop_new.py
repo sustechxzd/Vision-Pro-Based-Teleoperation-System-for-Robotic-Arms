@@ -2,7 +2,6 @@ import sys
 import os
 
 # Add the parent directory of src to sys.path
-
 # 把当前脚本的上一级目录加入 Python 搜索路径
 # 目的：可以直接 import Robotic_Arm.xxx
 # 常用于项目型代码而不是单文件脚本
@@ -18,9 +17,6 @@ import time # 控制频率与延时补偿
 
 
 # Define a simple Low-Pass Filter class
-# 定义一个一阶指数低通滤波器
-# 用于平滑手部 → 机械臂的位移映射
-
 class LowPassFilter:
     def __init__(self, alpha, initial_value):
         """        
@@ -28,7 +24,7 @@ class LowPassFilter:
         :param initial_value: 说明
         """
         self.alpha = alpha
-        self.filtered_value = np.array(initial_value, dtype=np.float64) # 初始输出设为机械臂初始位置
+        self.filtered_value = np.array(initial_value, dtype=np.float64)     # 初始输出设为机械臂初始位置
 
     def filter(self, new_value):
         """
@@ -42,6 +38,8 @@ class LowPassFilter:
 
 
 # gripper control subprocess
+# 定义一个一阶指数低通滤波器
+# 用于平滑手部 → 机械臂的位移映射
 def gripper_control_proc(gripper_state, robot_controller):
     """
     独立进程：只负责夹爪
@@ -52,7 +50,7 @@ def gripper_control_proc(gripper_state, robot_controller):
     # last_state = None
     # 持续监听共享变量
     while True:
-        if gripper_state.value == 1:    # 1 → 闭合夹爪（抓取）
+        if gripper_state.value == 1:     # 1 → 闭合夹爪（抓取）
             robot_controller.rm_set_gripper_pick(500, 200, True, 10)    # 设置抓取力度、速度等
         else:   # 张开夹爪
             robot_controller.rm_set_gripper_release(500, True, 10)  # 这里用的是进程间共享内存（multiprocessing.Value）
@@ -80,23 +78,25 @@ def main():
     # vp = VisionProStreamer(ip=visionpro_ip, record=True, frequency=40)
     vp = VisionProStreamer(ip=visionpro_ip, record=True)
     # 等待数据稳定（非常重要）
-    time.sleep(1) 
+    time.sleep(1)   # 暂停0.5秒，等待VisionPro数据稳定
 
+    # Rotatation matrix for vp2robot
+    # R_Vp2Robot = np.array([
+    #     [0, 0, 1],
+    #     [1, 0, 0],
+    #     [0, -1, 0] 
+    #     ])
     # ----------------坐标系转换矩阵----------------
     # Rotatation matrix for vp2robot
     # VisionPro 坐标系 → 机械臂坐标系
     # 用于姿态变换：
     R_Vp2Robot = np.array([
-        [0, 0, 1],
-        [1, 0, 0],
-        [0, -1, 0] 
+        [0, 1, 0],
+        [-1, 0, 0],
+        [0, 0, 1] 
         ])
-    
-    # R_Vp2Robot = np.array([
-    #     [0, 0, -1],
-    #     [1, 0, 0],
-    #     [0, -1, 0] 
-    #     ])
+
+
 
     # Get API version
     print("\nAPI Version: ", rm_api_version(), "\n")
@@ -105,7 +105,7 @@ def main():
     # 机械臂回到一个安全、舒适的初始姿态
     #robot.rm_movej([0.113,-8.014,0.185,87.687,-0.004,64.609,-0.008], v=20, r=0, connect=0, block=1)
     robot.rm_movej([0,-45,0,75,0,50,-30], v=20, r=0, connect=0, block=1)
-    robot.rm_movej([0,15,0,75,0,50,-30], v=20, r=0, connect=0, block=1)
+    robot.rm_movej([0,15,0,105,0,-30,-30], v=20, r=0, connect=0, block=1)
 
     # robot arm joint2pose solver
     arm_model = rm_robot_arm_model_e.RM_MODEL_RM_75_E
@@ -125,8 +125,11 @@ def main():
 
     # 保存“零参考位姿”
     robot_initial_pos = robot_initial_pose[:3] # 机械臂初始位置
+    # wxyz to xyzw
+    robot_initial_xyzw =  robot_initial_pose[3:]
+    robot_initial_xyzw = [robot_initial_xyzw[1], robot_initial_xyzw[2], robot_initial_xyzw[3], robot_initial_xyzw[0]]
     # robot_initial_rot_matrix = Rotation.from_euler('xyz', robot_initial_pose[3:]).as_matrix() # 机械臂初始旋转矩阵
-    robot_initial_rot_matrix = Rotation.from_quat(robot_initial_pose[3:]).as_matrix() # 机械臂初始旋转矩阵
+    robot_initial_rot_matrix = Rotation.from_quat(robot_initial_xyzw).as_matrix() # 机械臂初始旋转矩阵
 
     # get hand initial pose
     # --------------VisionPro 初始手势标定--------------
@@ -157,7 +160,6 @@ def main():
     target_frequency = 30.0  # 例如30Hz
     control_period = 1.0 / target_frequency  # 每次循环的目标周期
 
-
     # 主控制循环（核心）
     while True:
         loop_start_time = time.perf_counter()  # 记录循环开始时间
@@ -167,43 +169,32 @@ def main():
         # 得到 手部相对位移
         hand_pose_origin = vp.latest["left_wrist"].squeeze(0)
         hand_xyz = (hand_pose_origin[:3, 3] - initial_hand_xyz)
-
-        ####
         hand_rotation_matrix = hand_pose_origin[:3, :3]
 
         # 2. 姿态相对变化计算
-        R_rel_vp = np.dot(hand_rotation_matrix, np.linalg.inv(initial_hand_rotation_matrix))    # 手在 VisionPro 坐标系下的相对旋转
-        R_rel_robot = np.dot(R_Vp2Robot, np.dot(R_rel_vp, R_Vp2Robot.T))    # 转换到机械臂坐标系
-        # target_rot_matrix = np.dot(robot_initial_rot_matrix, R_rel_robot)   # 将转换后的相对旋转应用到机械臂初始旋转
+        R_rel_vp = np.dot(hand_rotation_matrix, np.linalg.inv(initial_hand_rotation_matrix))    # 计算手部在 VP 坐标系中的相对旋转
+        R_rel_robot = np.dot(R_Vp2Robot, np.dot(R_rel_vp, R_Vp2Robot.T))    # 将相对旋转转换到机械臂坐标系
+        #target_rot_matrix = np.dot(robot_initial_rot_matrix, R_rel_robot)   # 将转换后的相对旋转应用到机械臂初始旋转
+        target_rot_matrix = np.dot(R_rel_robot, robot_initial_rot_matrix)
 
-        # 加的小trick:
-        euler_angles = Rotation.from_matrix(R_rel_robot).as_euler('ZYX') # 将 R_rel_robot 转换为欧拉角（zyx内旋）
-        adjusted_euler_angles = [-euler_angles[0], euler_angles[1], euler_angles[2]]    # 修正坐标系手性 / 方向问题
-        R_rel_robot_adjusted = Rotation.from_euler('ZYX', adjusted_euler_angles).as_matrix()    # 将调整后的欧拉角转换回旋转矩阵
-        target_rot_matrix = np.dot(robot_initial_rot_matrix, R_rel_robot_adjusted)  # 得到机械臂目标姿态
-        
-        # 3. 姿态修正（经验 trick）
-        ee_quat_target = Rotation.from_matrix(target_rot_matrix).as_quat()  # 转换为四元数   bug???
-        # ee_quat_target = Rotation.from_matrix(target_rot_matrix).as_euler('ZYX')  # 转换为eular
-
-        # 4. 位移映射与缩放
+        # 3. 位移映射与缩放
         d_pos_raw = hand_xyz[:3]
-        # 手部位移 → 机械臂位移
-        # 并进行比例缩放
         d_pos_scaled = np.array([
-            d_pos_raw[1] * vp_pose_scale_y, # X_arm = Y_vp
-            d_pos_raw[0] * vp_pose_scale_x * -1, # Y_arm = -X_vp
+            d_pos_raw[1] * vp_pose_scale_x,
+            d_pos_raw[0] * vp_pose_scale_y * -1,
             d_pos_raw[2] * vp_pose_scale_z
         ])
-        ####
 
+        # 4. 姿态修正（经验 trick）
+        ee_quat_target = Rotation.from_matrix(target_rot_matrix).as_quat()  # 转换为四元数
+        # 调整四元数顺序从 (x, y, z, w) 到 (w, x, y, z)
+        ee_quat_target = np.array([ee_quat_target[3], ee_quat_target[0], ee_quat_target[1], ee_quat_target[2]])
         # position increment
         # 5. 位置平滑 + 目标位姿
         ee_pos_target = robot_initial_pos + d_pos_scaled
 
         # targetpose filter
         filter_ee_pos_target = lpf_pose.filter(ee_pos_target)
-        
         target_pose = np.hstack([filter_ee_pos_target, ee_quat_target]) # test for quat
         print("pose_array: ",target_pose)
 
@@ -215,6 +206,7 @@ def main():
         # 7. 手势 → 夹爪
         # 捏合 → 抓取
         # 张开 → 释放
+        close_gripper = vp
         close_gripper = vp.latest["left_pinch_distance"] < 0.03
         gripper_state.value = 1 if close_gripper else 0
 
